@@ -1,0 +1,54 @@
+Algorithmic Overview for the Light CAS Calculator
+==================================================
+
+The following describes the full pipeline for the algebra system. The narrative follows the life of a single user expression, from the first keystroke to the rendered LaTeX of the simplified result, and highlights the interactions between classes, their algorithms, and the contracts enforced at each boundary.
+
+1. User Interaction Layer
+-------------------------
+1. The application boots through `Main`, which instantiates the Swing-based shell containing the input field, evaluation trigger, history list, and LaTeX preview pane. `Main` wires listeners so that either pressing Enter or clicking Evaluate dispatches the current expression.
+2. The UI layer performs immediate sanitation: it trims the string, replaces non-breaking whitespace, and normalizes Unicode operator glyphs (`×`, `÷`, `−`, superscript digits) to ASCII. Validation runs in two passes: lexical admissibility (characters drawn from the language alphabet) and structural plausibility (balanced parentheses, no doubled binary operators). Violations prompt inline feedback rather than invoking the parser.
+3. A `SessionController` (logically co-located inside `Main`) builds a `Parser` instance with the sanitized expression and seeds a `ComputationRequest` containing metadata such as a request id, precision preferences, and whether the user asked for numeric or symbolic evaluation. The controller submits that request to the evaluator pipeline on a background worker to keep the UI responsive.
+
+2. Lexing and Parsing
+---------------------
+1. `Parser` owns the lexing loop. Internally it maintains a sliding cursor (`pos`, `current`) over the source string and yields `Token<Types, Object>` objects. The finite automaton recognizes numbers (integer, decimal, scientific), identifiers, function names, delimiters, and the operator set `+-*/%^!√=<>≤≥`.
+2. Each token carries its enumerated `Types` tag and a typed payload: numbers store `BigDecimal`, identifiers store `Symbol` handles, operators store the canonical char (supporting multi-character replacements such as `<=` → `≤`). Tokens also record source span offsets for accurate diagnostics downstream.
+3. After lexing, `Parser` proceeds with expression parsing using a Pratt-style precedence climber. Recursive descent productions cover:
+   * literals and parenthesized expressions,
+   * unary operators (negation, factorial, derivative markers),
+   * binary infix operators grouped by precedence tiers,
+   * postfix constructs such as power towers and factorials.
+4. The parser returns a fully-typed abstract syntax tree (AST) composed of lightweight `Node` records. For example, a binary node contains operator type, left/right children, and an inferred result domain (integer, rational, real, symbolic). Function calls map to `CallNode` holding the callee `Symbol` and ordered argument list. Errors short-circuit with descriptive exceptions referencing the offending token span.
+
+3. Symbol and Numeric Core
+--------------------------
+1. `Symbol` encapsulates identifiers and typed constants. It supplies canonical ordering and hashing so that structurally equivalent subtrees deduplicate cleanly. Built-in symbols (π, e, i, true, false) live in a registry consulted by both parser and evaluator.
+2. `Number` is the backbone for scalar arithmetic. It wraps a tagged union (`Type`) choosing between arbitrary-precision integer, rational (numerator + denominator reduced via GCD), real (`BigDecimal` with context), and complex (pair of `Number`). Methods enforce immutability and guarantee normalized forms (e.g., rationals always store coprime components, complex numbers collapse to real when imaginary part is zero).
+3. `Vector` and `Matrix` extend the numeric layer, sharing operations via interfaces. They carry dimension metadata and lazily evaluate expensive transformations when possible.
+4. Utility structures such as `LinkedList`, `Pair`, and `TokenStream` exist mainly to minimize allocations in hot paths and to express intent explicitly (ordered vs. associative collections).
+
+4. Evaluation Pipeline
+----------------------
+1. The evaluator receives the AST and a `Context` derived from user preferences (precision, assumptions, available definitions). Evaluation proceeds depth-first but splits into two cooperating passes: normalization and simplification.
+2. Normalization ensures operands share compatible domains. For instance, mixing rationals and integers upgrades the integer operand to rational form. Symbolic functions consult the `SymbolTable` to resolve definitions or fallback implementations (e.g., `sin` recognized as transcendental, `diff` recognized as derivative operator requiring symbolic rules).
+3. Simplification applies a rule engine. The rule catalog covers:
+   * arithmetic identities (neutral/annihilator elements, distributivity, power rules),
+   * structural rules (flatten nested sums/products, sort operands for canonicalization),
+   * function-specific reductions (logarithm identities, trigonometric simplifications, polynomial collection).
+   Rules follow a priority schedule to avoid oscillations: canonicalization, constant folding, structural contraction, function-specific rewrites, numeric evaluation.
+4. If the user requested evaluation, numerical routines kick in after symbolic simplification. This stage leverages `Number`’s arbitrary-precision algorithms: exponentiation by squaring, Newton iterations for roots, series approximations for transcendental functions. When exact arithmetic remains feasible, rationals stay rational; otherwise the evaluator produces approximations annotated with the precision actually achieved.
+5. Error handling propagates rich diagnostics back up the chain, including context (node type, operands) and hints (e.g., “division by zero detected while simplifying 1/(x-x)”). Recoverable warnings (loss of significance, truncation) are attached to the `ComputationResult`.
+
+5. Rendering and Output
+-----------------------
+1. Once simplification stabilizes, the final expression tree is handed to a renderer facade. `Main` uses `TeXFormula`/`TeXIcon` (from JLaTeXMath) to paint LaTeX. The renderer traverses the AST and emits LaTeX fragments using a small DSL that knows how to parenthesize operations, render fractions, stacks, radicals, and piecewise definitions.
+2. `ImageDisplay` wraps the resulting icon inside a buffered image. It clears the canvas with RGBA white, paints the TeX glyphs, and updates the preview window. The same image can be saved to disk (`formula.png`) or piped to other modules (clipboard, export dialog).
+3. The UI updates the output panel, history list, and status bar (showing runtime, simplification depth, warnings). Because evaluation occurs off the EDT, the completion callback marshals updates back onto Swing’s thread before mutating UI widgets.
+
+6. Control Flow Summary
+-----------------------
+1. `Main` waits for user input, validates, and creates a request.
+2. `Parser` tokenizes and builds the AST, relying on `Token`, `Types`, and `Symbol`.
+3. Evaluator normalizes types (`Number`, `Vector`, etc.), applies simplification rules, and computes results using arbitrary precision arithmetic.
+4. Renderer converts the final tree to LaTeX which `ImageDisplay` shows; warnings/errors bubble back to UI.
+5. The loop repeats, letting users iteratively refine expressions while reusing the previously constructed infrastructure (cached tokens, symbol tables, numeric contexts).

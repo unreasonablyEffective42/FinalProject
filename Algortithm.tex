@@ -1,0 +1,60 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\title{Computer Algebra System with Graphical Interface}
+\author{Jordan Jacobson}
+\date{November 7, 2025}
+
+\begin{document}
+\maketitle
+
+\section{Overview}
+This document outlines the complete pipeline of the light computer algebra system (CAS). The narrative follows a user expression from the initial keystroke through parsing, evaluation, and LaTeX rendering, highlighting the responsibilities of the principal classes and the contracts at each boundary.
+
+\section{User Interaction Layer}
+\begin{enumerate}
+  \item The application boots via \texttt{Main}, which instantiates the Swing shell containing the input field, evaluation trigger, history list, and LaTeX preview pane. Event listeners dispatch expressions when the user presses Enter or clicks Evaluate.
+  \item The UI performs sanitation by trimming whitespace, normalizing glyphs (e.g., $\times$, $\div$, $-$), and validating characters and structure before invoking the parser.
+  \item A session controller co-located with \texttt{Main} constructs a \texttt{Parser} using the sanitized string and packages metadata (request id, precision settings, evaluation mode) into a \texttt{ComputationRequest}. Work is forwarded to the evaluator on a background thread to keep the UI responsive.
+\end{enumerate}
+
+\section{Lexing and Parsing}
+\begin{enumerate}
+  \item \texttt{Parser} handles lexing with a cursor over the source string, emitting \texttt{Token}$\langle$\texttt{Types}, Object$\rangle$ instances for numbers, identifiers, delimiters, and operators such as $+ - * / \% ^ ! \sqrt{} = < > \leq \geq$.
+  \item Tokens carry their enumerated type, payload (\texttt{BigDecimal}, \texttt{Symbol}, canonical operator char), and span offsets for diagnostics.
+  \item Parsing uses a Pratt-style precedence climber supporting literals, parentheses, unary operators, precedence-tiered binary operators, and postfix constructs. The output is a typed abstract syntax tree (AST) of lightweight nodes (\texttt{BinaryNode}, \texttt{CallNode}, etc.).
+\end{enumerate}
+
+\section{Symbol and Numeric Core}
+\begin{enumerate}
+  \item \texttt{Symbol} represents identifiers and constants, guaranteeing canonical ordering and hashing so structurally identical subtrees deduplicate.
+  \item \texttt{Number} forms the scalar backbone with tagged representations for arbitrary-precision integer, rational, real (\texttt{BigDecimal}), and complex values. Each variant enforces immutability and normalized form.
+  \item \texttt{Vector} and \texttt{Matrix} extend arithmetic to collections while preserving dimension metadata and deferring expensive operations until required.
+  \item Utility structures (\texttt{LinkedList}, \texttt{Pair}, \texttt{TokenStream}) support hot paths where allocations and ordering semantics matter.
+\end{enumerate}
+
+\section{Evaluation Pipeline}
+\begin{enumerate}
+  \item The evaluator consumes the AST and a \texttt{Context} built from user preferences. Traversal proceeds depth-first with normalization and simplification passes.
+  \item Normalization aligns operand domains (e.g., upgrading integers to rationals when mixed) and consults the symbol table for function definitions and derivative rules.
+  \item Simplification applies prioritized rule sets covering arithmetic identities, structural canonicalization, and function-specific reductions. Ordering (canonicalization, constant folding, structural contraction, function rewrites, numeric evaluation) prevents oscillation.
+  \item Numeric evaluation runs after symbolic simplification when requested, relying on \texttt{Number}'s arbitrary-precision routines such as exponentiation by squaring, Newton iteration, and series approximations. Exact forms are preserved whenever possible.
+  \item Diagnostics propagate through structured exceptions detailing node context and recovery hints; warnings (loss of significance, truncation) attach to the \texttt{ComputationResult}.
+\end{enumerate}
+
+\section{Rendering and Output}
+\begin{enumerate}
+  \item The simplified AST passes to a renderer facade. Using \texttt{TeXFormula}/\texttt{TeXIcon}, the renderer emits LaTeX fragments with correct parentheses, fractions, radicals, and piecewise layouts.
+  \item \texttt{ImageDisplay} paints the icon onto a buffered image, refreshes the preview window, and exposes the rendered asset for export (e.g., \texttt{formula.png}).
+  \item The UI updates the output panel, history list, and status indicators (runtime, simplification depth, warnings) from the Swing event thread once evaluation completes.
+\end{enumerate}
+
+\section{Control Flow Summary}
+\begin{enumerate}
+  \item \texttt{Main} captures input, sanitizes it, and issues a computation request.
+  \item \texttt{Parser} tokenizes the expression and builds the AST using \texttt{Token}, \texttt{Types}, and \texttt{Symbol}.
+  \item The evaluator normalizes domains, simplifies the tree, and performs arbitrary-precision arithmetic via \texttt{Number}, \texttt{Vector}, and related classes.
+  \item The renderer converts the result to LaTeX, which \texttt{ImageDisplay} presents; warnings and errors return to the UI for display.
+  \item The cycle repeats for each user submission, reusing cached symbols, tokens, and numeric contexts.
+\end{enumerate}
+
+\end{document}
