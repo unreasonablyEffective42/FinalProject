@@ -8,7 +8,7 @@ public class Lexer {
     int pos;
     int len;
 
-    String[] reserved = {"sqrt", "sin", "cos", "tan", "ln", "log"};
+    String[] reserved = {"sqrt", "sin", "cos", "tan", "ln", "log", "integrate", "roots", "factor"};
     ArrayList<String> groupings = new ArrayList<>(Arrays.asList(reserved));
     String operators = "+-*/%^";
     public ArrayList<Token> tokens = new ArrayList<Token>();    
@@ -74,41 +74,6 @@ public class Lexer {
         return builder.toString();
     }
 
-    private Token parseDerivativeToken() {
-        // current is first 'd'
-        advance(); // consume first d, move to second
-        if (current != 'd') {
-            throw new RuntimeException("Invalid derivative operator");
-        }
-        advance(); // move past second d
-        skipInlineWhitespace();
-        if (current != '(') {
-            throw new RuntimeException("Derivative operator must be followed by '('");
-        }
-        advance(); // move inside parentheses
-        skipInlineWhitespace();
-        String first = parseIdentifierString();
-        skipInlineWhitespace();
-        String value;
-        if (current == ')') {
-            advance();
-            value = String.format("\\frac{d}{d%s}", first);
-        } else if (current == ',') {
-            advance();
-            skipInlineWhitespace();
-            String second = parseIdentifierString();
-            skipInlineWhitespace();
-            if (current != ')') {
-                throw new RuntimeException("Derivative operator missing closing ')'");
-            }
-            advance();
-            value = String.format("\\frac{d%s}{d%s}", first, second);
-        } else {
-            throw new RuntimeException("Invalid derivative parameters");
-        }
-        return new Token(Types.PREFIX, value);
-    }
-
     private Token parseLimitToken() {
         // current is '(' at entry
         advance(); // consume '('
@@ -164,9 +129,6 @@ public class Lexer {
             }
             if (Character.isDigit(current)){
                 return this.parseNumber();
-            }
-            else if (current == 'd' && peekChar() == 'd') {
-                return parseDerivativeToken();
             }
             else if (operators.contains(String.valueOf(current))) {
                 Token tok =new Token(Types.OPERATOR, current);
@@ -229,7 +191,7 @@ public class Lexer {
             return new Token(Types.NUMBER, lookupConstant(identifier));
         }
 
-        if (groupings.contains(identifier)) {
+        if (groupings.contains(identifier) || identifier.equals("dd")) {
             if (current != '(') {
                 throw new RuntimeException("Grouping '" + identifier + "' must be followed by '('");
             }

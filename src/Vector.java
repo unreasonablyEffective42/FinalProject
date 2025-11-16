@@ -1,47 +1,34 @@
-import java.util.function.Function;
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.List;
-public class Vector{
-    public Object[] elems;
-    public int size;
-     
-    Vector(Object[] nums){
-        elems = nums;
-        size = nums.length;
-    }
-    Vector(LinkedList nums){
-        this.size = nums.size();
-        LinkedList current = nums;
-        ArrayList temp = new ArrayList();
-        while(current != null){
-            temp.add(current.head());
-            current = (LinkedList)current.tail();
-        }
-        elems = temp.toArray();
+
+/**
+ * Minimal vector container used by {@link Number} for composite numeric
+ * operations. It stores arbitrary objects and exposes the length so that
+ * arithmetic helpers in {@code Number} can implement element-wise ops.
+ */
+public class Vector {
+    public final Object[] elems;
+    public final int size;
+
+    public Vector(Object[] elems) {
+        this.elems = elems;
+        this.size = elems.length;
     }
 
-    Vector(Vector other) {
+    public Vector(Vector other) {
         this.elems = Arrays.copyOf(other.elems, other.size);
-        this.size  = other.size;
-    }
-
-
-    public static Vector of (Object[] nums){
-       return new Vector(nums);
+        this.size = other.size;
     }
 
     @Override
     public String toString() {
-        StringBuilder str = new StringBuilder("<");
-        for (int i = 0; i < size; i++){
-            str.append(elems[i].toString());
-            if (i < size-1) {
-                str.append(" ");
-            } 
+        StringBuilder builder = new StringBuilder("<");
+        for (int i = 0; i < size; i++) {
+            builder.append(elems[i]);
+            if (i < size - 1) {
+                builder.append(" ");
+            }
         }
-        str.append(">");
-        return str.toString();
+        builder.append(">");
+        return builder.toString();
     }
 }
-

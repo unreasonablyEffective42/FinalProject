@@ -1,4 +1,6 @@
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.awt.image.BufferedImage;
 import org.scilab.forge.jlatexmath.TeXFormula;
 import org.scilab.forge.jlatexmath.TeXIcon;
@@ -30,10 +32,7 @@ public class Renderer{
         String result;
         switch(expr.getRoot().type()){
             case (Types.OPERATOR):
-                result = this.operators.get(expr.getRoot().value());
-                return String.format(result,
-                        compile(expr.getLeft(), expr.getRoot()),
-                        compile(expr.getRight(), expr.getRoot()));
+                return renderOperator(expr);
             case (Types.NUMBER):
                 return renderNumber(expr.getRoot().value());
             case (Types.SYMBOL):
@@ -62,7 +61,7 @@ public class Renderer{
                 return "\\mathrm{e}";
             }
             if (approxEquals(number, Number.constantTau())) {
-                return "2\\pi";
+                return "\\tau";
             }
             if (Double.isInfinite(Number.toDouble(number))) {
                 return "\\infty";
@@ -105,8 +104,48 @@ public class Renderer{
         if ("int".equals(value)) {
             return renderIntegral(expr);
         }
-        String result = "\\%s{%s}";
-        return String.format(result, value, compile(expr.getRight(), expr.getRoot()));
+        if ("integrate".equals(value)) {
+            return renderNumericIntegral(expr);
+        }
+        if ("dd".equals(value)) {
+            return renderDerivative(expr);
+        }
+        if ("roots".equals(value)) {
+            return renderRootsRequest(expr);
+        }
+        if ("rootsResult".equals(value)) {
+            return renderRootsResult(expr);
+        }
+        if ("factor".equals(value)) {
+            return renderFactorRequest(expr);
+        }
+        if ("factorResult".equals(value)) {
+            return renderFactorResult(expr);
+        }
+        String argument = compile(expr.getRight(), expr.getRoot());
+        return String.format("\\%s\\left(%s\\right)", value, argument);
+    }
+
+    private String renderOperator(Expression expr) {
+        char symbol = (Character) expr.getRoot().value();
+        Expression left = expr.getLeft();
+        Expression right = expr.getRight();
+        String leftStr = compile(left, expr.getRoot());
+        String rightStr = compile(right, expr.getRoot());
+
+        if (symbol == '*') {
+            String rationalProduct = renderRationalProduct(expr, left, right);
+            if (rationalProduct != null) {
+                return rationalProduct;
+            }
+        }
+
+        if (symbol == '*' && usesImplicitMultiplication(left, right)) {
+            return leftStr + rightStr;
+        }
+
+        String format = this.operators.get(symbol);
+        return String.format(format, leftStr, rightStr);
     }
 
     private String renderIntegral(Expression expr) {
@@ -142,6 +181,67 @@ public class Renderer{
             return "";
         }
         return compile(wrapper.getLeft(), wrapper.getRoot());
+    }
+
+    private String renderDerivative(Expression expr) {
+        Expression innerExpr = expr.getLeft();
+        Expression variable = expr.getRight();
+        String variableName = variable != null ? compile(variable, expr.getRoot()) : "";
+        String inner = innerExpr != null ? compile(innerExpr, expr.getRoot()) : "";
+        return String.format("\\frac{d}{d%s} \\left(%s\\right)", variableName, inner);
+    }
+
+    private String renderNumericIntegral(Expression expr) {
+        Expression params = expr.getRight();
+        if (params == null || params.getLeft() == null || params.getRight() == null) {
+            return "integrate(...)";
+        }
+        String variable = compile(params.getLeft(), expr.getRoot());
+        Expression bounds = params.getRight();
+        Expression lower = bounds.getLeft();
+        Expression upper = bounds.getRight();
+        String lowerStr = compile(lower, expr.getRoot());
+        String upperStr = compile(upper, expr.getRoot());
+        String integrand = compile(expr.getLeft(), expr.getRoot());
+        return String.format("\\int_{%s}^{%s} %s d%s", lowerStr, upperStr, integrand, variable);
+    }
+
+    private String renderRootsRequest(Expression expr) {
+        String polynomial = expr.getLeft() != null ? compile(expr.getLeft(), expr.getRoot()) : "";
+        String variable = expr.getRight() != null ? compile(expr.getRight(), expr.getRoot()) : "";
+        return String.format("\\operatorname{roots}\\left(%s, %s\\right)", polynomial, variable);
+    }
+
+    private String renderRootsResult(Expression expr) {
+        List<String> parts = new ArrayList<>();
+        Expression current = expr.getLeft();
+        while (current != null) {
+            if (current.getLeft() != null) {
+                parts.add(compile(current.getLeft(), expr.getRoot()));
+            }
+            current = current.getRight();
+        }
+        String joined = String.join(", ", parts);
+        return String.format("\\left\\{%s\\right\\}", joined);
+    }
+
+    private String renderFactorRequest(Expression expr) {
+        String polynomial = expr.getLeft() != null ? compile(expr.getLeft(), expr.getRoot()) : "";
+        String variable = expr.getRight() != null ? compile(expr.getRight(), expr.getRoot()) : "";
+        return String.format("\\operatorname{factor}\\left(%s, %s\\right)", polynomial, variable);
+    }
+
+    private String renderFactorResult(Expression expr) {
+        List<String> parts = new ArrayList<>();
+        Expression current = expr.getLeft();
+        while (current != null) {
+            if (current.getLeft() != null) {
+                parts.add(compile(current.getLeft(), expr.getRoot()));
+            }
+            current = current.getRight();
+        }
+        String joined = String.join(", ", parts);
+        return String.format("\\left\\{%s\\right\\}", joined);
     }
 
     private String renderParentheses(Expression expr, Token parent) {
@@ -184,8 +284,85 @@ public class Renderer{
         return false;
     }
 
+    private boolean usesImplicitMultiplication(Expression left, Expression right) {
+        return isNumericNode(left) && !isNumericNode(right);
+    }
+
+    private String renderRationalProduct(Expression expr, Expression left, Expression right) {
+        RationalParts parts = null;
+        Expression other = null;
+        if (isRationalNumber(left)) {
+            parts = splitRational((Number) left.getRoot().value());
+            other = right;
+        } else if (isRationalNumber(right)) {
+            parts = splitRational((Number) right.getRoot().value());
+            other = left;
+        }
+        if (parts == null || other == null || isOne(parts.denominator)) {
+            return null;
+        }
+        String numeratorStr = compile(other, expr.getRoot());
+        if (!isOne(parts.numerator)) {
+            if (isNegativeOne(parts.numerator)) {
+                numeratorStr = "-" + numeratorStr;
+            } else {
+                String coeffStr = renderNumber(parts.numerator);
+                numeratorStr = String.format("%s \\cdot %s", coeffStr, numeratorStr);
+            }
+        }
+        String denominatorStr = renderNumber(parts.denominator);
+        return String.format("\\frac{%s}{%s}", numeratorStr, denominatorStr);
+    }
+
+    private boolean isNumericNode(Expression expr) {
+        return expr != null
+                && expr.getRoot() != null
+                && expr.getRoot().type() == Types.NUMBER;
+    }
+
+    private boolean isRationalNumber(Expression expr) {
+        if (expr == null || expr.getRoot() == null || expr.getRoot().type() != Types.NUMBER) {
+            return false;
+        }
+        Number number = (Number) expr.getRoot().value();
+        return number.type == Number.Type.RATIONAL || number.type == Number.Type.BIGRATIONAL;
+    }
+
+    private RationalParts splitRational(Number number) {
+        switch (number.type) {
+            case RATIONAL:
+                return new RationalParts(
+                        Number.integer(number.num),
+                        Number.integer(number.den));
+            case BIGRATIONAL:
+                return new RationalParts(
+                        Number.integer(number.bigNum),
+                        Number.integer(number.bigDen));
+            default:
+                return null;
+        }
+    }
+
+    private boolean isOne(Number number) {
+        return Number.numericEquals(number, Number.integer(1));
+    }
+
+    private boolean isNegativeOne(Number number) {
+        return Number.numericEquals(number, Number.integer(-1));
+    }
+
     public TeXFormula toTex(Expression expr){
         return new TeXFormula(this.compile(expr));
+    }
+
+    private static class RationalParts {
+        final Number numerator;
+        final Number denominator;
+
+        RationalParts(Number numerator, Number denominator) {
+            this.numerator = numerator;
+            this.denominator = denominator;
+        }
     }
 
 }

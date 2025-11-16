@@ -1,0 +1,22 @@
+# IDE and OS metadata
+.idea/
+*.iml
+.DS_Store
+
+# Build outputs
+out/
+*.class
+
+# Documentation artifacts (generated locally only)
+docs/
+
+# Generated documentation / LaTeX artifacts
+*.aux
+*.fdb_latexmk
+*.fls
+*.log
+*.synctex.gz
+texput.*
+
+# PDFs generated from LaTeX
+*.pdf

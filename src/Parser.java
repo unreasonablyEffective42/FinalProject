@@ -2,6 +2,7 @@ import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 
 class Expression {
     Token root;
@@ -48,8 +49,20 @@ public class Parser {
     private final Lexer lexer;
     private final ArrayList<Token> tokens;
     private int position;
+    private final boolean evaluateDerivative;
+    private final boolean evaluateIntegrals;
 
     Parser(String src) {
+        this(src, true, true);
+    }
+
+    Parser(String src, boolean evaluateDerivative) {
+        this(src, evaluateDerivative, true);
+    }
+
+    Parser(String src, boolean evaluateDerivative, boolean evaluateIntegrals) {
+        this.evaluateDerivative = evaluateDerivative;
+        this.evaluateIntegrals = evaluateIntegrals;
         lexer = new Lexer(src);
         lexer.lexAll();
         tokens = new ArrayList<>(lexer.tokens);
@@ -58,7 +71,13 @@ public class Parser {
         initOperators();
     }
 
-    private Parser(ArrayList<Token> preLexedTokens) {
+    private Parser(ArrayList<Token> preLexedTokens, boolean evaluateDerivative) {
+        this(preLexedTokens, evaluateDerivative, true);
+    }
+
+    private Parser(ArrayList<Token> preLexedTokens, boolean evaluateDerivative, boolean evaluateIntegrals) {
+        this.evaluateDerivative = evaluateDerivative;
+        this.evaluateIntegrals = evaluateIntegrals;
         lexer = null;
         tokens = new ArrayList<>(preLexedTokens);
         insertImplicitMultiplication(tokens);
@@ -177,7 +196,7 @@ public class Parser {
 
     private Expression parseParens() {
         ArrayList<Token> innerTokens = collectScopedTokens();
-        Parser innerParser = new Parser(new ArrayList<>(innerTokens));
+        Parser innerParser = new Parser(new ArrayList<>(innerTokens), evaluateDerivative, evaluateIntegrals);
         Expression innerExpr = innerParser.parse();
         Token groupToken = new Token(Types.PARENTHESES, 'p');
         return new Expression(groupToken, null, innerExpr);
@@ -190,8 +209,20 @@ public class Parser {
         if ("int".equals(groupingToken.value())) {
             return parseIntegralGrouping(groupingToken, innerTokens);
         }
+        if ("integrate".equals(groupingToken.value())) {
+            return parseNumericIntegral(innerTokens);
+        }
+        if ("dd".equals(groupingToken.value())) {
+            return parseDerivativeGrouping(innerTokens);
+        }
+        if ("roots".equals(groupingToken.value())) {
+            return parseRootsGrouping(groupingToken, innerTokens);
+        }
+        if ("factor".equals(groupingToken.value())) {
+            return parseFactorGrouping(groupingToken, innerTokens);
+        }
 
-        Parser innerParser = new Parser(new ArrayList<>(innerTokens));
+        Parser innerParser = new Parser(new ArrayList<>(innerTokens), evaluateDerivative, evaluateIntegrals);
         Expression innerExpr = innerParser.parse();
 
         if (innerExpr != null) {
@@ -218,6 +249,112 @@ public class Parser {
 
         Expression paramsList = buildIntegralParamList(variable, lower, upper);
         return new Expression(groupingToken, paramsList, integrand);
+    }
+
+    private Expression parseDerivativeGrouping(ArrayList<Token> innerTokens) {
+        ArrayList<ArrayList<Token>> arguments = splitArguments(innerTokens);
+        if (arguments.size() < 2) {
+            throw new IllegalStateException("dd requires at least expression and variable");
+        }
+
+        Expression expression = parseTokens(arguments.get(0));
+        Expression variableExpr = parseTokens(arguments.get(1));
+
+        if (variableExpr == null || variableExpr.getRoot() == null || variableExpr.getRoot().type() != Types.SYMBOL) {
+            throw new IllegalStateException("Variable in dd must be a symbol");
+        }
+
+        if (!evaluateDerivative) {
+            Expression node = new Expression(new Token(Types.GROUPING, "dd"));
+            node.left = expression;
+            node.right = variableExpr;
+            return node;
+        }
+
+        String variableName = variableExpr.getRoot().value().toString();
+        Evaluator evaluator = new Evaluator();
+        return evaluator.differentiate(expression, variableName);
+    }
+
+    private Expression parseNumericIntegral(ArrayList<Token> innerTokens) {
+        ArrayList<ArrayList<Token>> arguments = splitArguments(innerTokens);
+        if (arguments.size() != 4) {
+            throw new IllegalStateException("integrate requires four arguments (expr, variable, lower, upper)");
+        }
+
+        Expression integrand = parseTokens(arguments.get(0));
+        Expression variableExpr = parseTokens(arguments.get(1));
+        Expression lowerExpr = parseTokens(arguments.get(2));
+        Expression upperExpr = parseTokens(arguments.get(3));
+
+        if (variableExpr == null || variableExpr.getRoot() == null || variableExpr.getRoot().type() != Types.SYMBOL) {
+            throw new IllegalStateException("Variable in integrate must be a symbol");
+        }
+        if (!evaluateIntegrals) {
+            return buildIntegrateNode(integrand, variableExpr, lowerExpr, upperExpr);
+        }
+        String variableName = variableExpr.getRoot().value().toString();
+
+        NumericIntegrator integrator = new NumericIntegrator();
+        double lower = integrator.evaluate(lowerExpr);
+        double upper = integrator.evaluate(upperExpr);
+        double result = integrator.integrate(integrand, variableName, lower, upper);
+
+        return new Expression(new Token(Types.NUMBER, Number.real((float) result)));
+    }
+
+    private Expression parseRootsGrouping(Token groupingToken, ArrayList<Token> innerTokens) {
+        ArrayList<ArrayList<Token>> arguments = splitArguments(innerTokens);
+        if (arguments.size() != 2) {
+            throw new IllegalStateException("roots requires expression and variable arguments");
+        }
+        Expression polynomialExpr = parseTokens(arguments.get(0));
+        Expression variableExpr = parseTokens(arguments.get(1));
+        if (variableExpr == null || variableExpr.getRoot() == null || variableExpr.getRoot().type() != Types.SYMBOL) {
+            throw new IllegalStateException("Variable in roots must be a symbol");
+        }
+        if (!evaluateIntegrals) {
+            Expression node = new Expression(groupingToken);
+            node.left = polynomialExpr;
+            node.right = variableExpr;
+            return node;
+        }
+        String variableName = variableExpr.getRoot().value().toString();
+        PolynomialExtractor extractor = new PolynomialExtractor();
+        Polynomial polynomial = extractor.extract(polynomialExpr, variableName);
+        if (polynomial == null || polynomial.degree() < 1) {
+            throw new IllegalStateException("Expression is not a polynomial in " + variableName);
+        }
+        PolynomialSolver solver = new PolynomialSolver();
+        List<Expression> roots = solver.solve(polynomial);
+        return buildRootsResultExpression(roots);
+    }
+
+    private Expression parseFactorGrouping(Token groupingToken, ArrayList<Token> innerTokens) {
+        ArrayList<ArrayList<Token>> arguments = splitArguments(innerTokens);
+        if (arguments.size() != 2) {
+            throw new IllegalStateException("factor requires expression and variable arguments");
+        }
+        Expression polynomialExpr = parseTokens(arguments.get(0));
+        Expression variableExpr = parseTokens(arguments.get(1));
+        if (variableExpr == null || variableExpr.getRoot() == null || variableExpr.getRoot().type() != Types.SYMBOL) {
+            throw new IllegalStateException("Variable in factor must be a symbol");
+        }
+        if (!evaluateIntegrals) {
+            Expression node = new Expression(groupingToken);
+            node.left = polynomialExpr;
+            node.right = variableExpr;
+            return node;
+        }
+        String variableName = variableExpr.getRoot().value().toString();
+        PolynomialExtractor extractor = new PolynomialExtractor();
+        Polynomial polynomial = extractor.extract(polynomialExpr, variableName);
+        if (polynomial == null || polynomial.degree() < 1) {
+            throw new IllegalStateException("Expression is not a polynomial in " + variableName);
+        }
+        PolynomialFactorizer factorizer = new PolynomialFactorizer();
+        List<Expression> factors = factorizer.factor(polynomial, variableName);
+        return buildFactorResultExpression(factors);
     }
 
     private ArrayList<ArrayList<Token>> splitArguments(ArrayList<Token> tokens) {
@@ -249,7 +386,7 @@ public class Parser {
     }
 
     private Expression parseTokens(ArrayList<Token> tokens) {
-        Parser parser = new Parser(new ArrayList<>(tokens));
+        Parser parser = new Parser(new ArrayList<>(tokens), evaluateDerivative, evaluateIntegrals);
         return parser.parse();
     }
 
@@ -272,6 +409,53 @@ public class Parser {
             }
         }
         return head;
+    }
+
+    private Expression buildIntegrateNode(Expression integrand, Expression variableExpr,
+                                          Expression lowerExpr, Expression upperExpr) {
+        Expression node = new Expression(new Token(Types.GROUPING, "integrate"));
+        node.left = integrand;
+        Expression params = new Expression(new Token(Types.GROUPING, "integrateParams"));
+        params.left = variableExpr;
+        params.right = new Expression(new Token(Types.GROUPING, "bounds"), lowerExpr, upperExpr);
+        node.right = params;
+        return node;
+    }
+
+    private Expression buildRootsResultExpression(List<Expression> roots) {
+        Expression head = null;
+        Expression tail = null;
+        for (Expression rootExpr : roots) {
+            Expression entry = new Expression(new Token(Types.GROUPING, "rootEntry"));
+            entry.left = rootExpr;
+            if (head == null) {
+                head = entry;
+            } else {
+                tail.right = entry;
+            }
+            tail = entry;
+        }
+        Expression result = new Expression(new Token(Types.GROUPING, "rootsResult"));
+        result.left = head;
+        return result;
+    }
+
+    private Expression buildFactorResultExpression(List<Expression> factors) {
+        Expression head = null;
+        Expression tail = null;
+        for (Expression factorExpr : factors) {
+            Expression entry = new Expression(new Token(Types.GROUPING, "factorEntry"));
+            entry.left = factorExpr;
+            if (head == null) {
+                head = entry;
+            } else {
+                tail.right = entry;
+            }
+            tail = entry;
+        }
+        Expression result = new Expression(new Token(Types.GROUPING, "factorResult"));
+        result.left = head;
+        return result;
     }
 
     private Expression createNumberExpression(Token token) {
